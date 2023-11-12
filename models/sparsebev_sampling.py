@@ -10,16 +10,17 @@ def make_sample_points(query_bbox, offset, pc_range):
     query_bbox: [B, Q, 10]
     offset: [B, Q, num_points, 4], normalized by stride
     '''
+    # 解码查询pillar，得到中心点坐标、尺寸、角度
     query_bbox = decode_bbox(query_bbox, pc_range)  # [B, Q, 9]
 
-    xyz = query_bbox[..., 0:3]  # [B, Q, 3]
-    wlh = query_bbox[..., 3:6]  # [B, Q, 3]
-    ang = query_bbox[..., 6:7]  # [B, Q, 1]
+    xyz = query_bbox[..., 0:3]  # [B, Q, 3] 目标位置
+    wlh = query_bbox[..., 3:6]  # [B, Q, 3] 目标尺寸
+    ang = query_bbox[..., 6:7]  # [B, Q, 1] 目标方向
 
-    delta_xyz = offset[..., 0:3]  # [B, Q, P, 3]
-    delta_xyz = wlh[:, :, None, :] * delta_xyz  # [B, Q, P, 3]
-    delta_xyz = rotation_3d_in_axis(delta_xyz, ang)  # [B, Q, P, 3]
-    sample_xyz = xyz[:, :, None, :] + delta_xyz  # [B, Q, P, 3]
+    delta_xyz = offset[..., 0:3]  # [B, Q, P, 3] 取得采样偏移
+    delta_xyz = wlh[:, :, None, :] * delta_xyz  # [B, Q, P, 3] 乘以尺寸
+    delta_xyz = rotation_3d_in_axis(delta_xyz, ang)  # [B, Q, P, 3] 旋转到目标方向
+    sample_xyz = xyz[:, :, None, :] + delta_xyz  # [B, Q, P, 3] 加上目标位置
 
     return sample_xyz  # [B, Q, P, 3]
 

@@ -47,19 +47,27 @@ class SparseBEVHead(DETRHead):
         self.dn_label_noise_scale = 0.5
 
     def _init_layers(self):
+        # 构造初始的查询pillar：900个，每个包含10个维度
         self.init_query_bbox = nn.Embedding(self.num_query, 10)  # (x, y, z, w, l, h, sin, cos, vx, vy)
+        # 构造初始的查询pillar的特征：形状是[11, 255]
         self.label_enc = nn.Embedding(self.num_classes + 1, self.embed_dims - 1)  # DAB-DETR
 
+        # 将查询pillar的z，vx，vy初始化为0，h初始化为1.5
         nn.init.zeros_(self.init_query_bbox.weight[:, 2:3])
         nn.init.zeros_(self.init_query_bbox.weight[:, 8:10])
         nn.init.constant_(self.init_query_bbox.weight[:, 5:6], 1.5)
 
+        # 构造查询pillar的坐标初值
+        # grid_size = 30
         grid_size = int(math.sqrt(self.num_query))
         assert grid_size * grid_size == self.num_query
+        # 构造30*30的网格，构造每个网格的坐标：[0,0],[0,1]...[29,29]，总共900个
         x = y = torch.arange(grid_size)
         xx, yy = torch.meshgrid(x, y, indexing='ij')  # [0, grid_size - 1]
         xy = torch.cat([xx[..., None], yy[..., None]], dim=-1)
+        # 将坐标归一化到[0,1]之间
         xy = (xy + 0.5) / grid_size  # [0.5, grid_size - 0.5] / grid_size ~= (0, 1)
+        # 将坐标从[30, 30, 2]转成[900, 2]
         with torch.no_grad():
             self.init_query_bbox.weight[:, :2] = xy.reshape(-1, 2)  # [Q, 2]
 
@@ -67,18 +75,22 @@ class SparseBEVHead(DETRHead):
         self.transformer.init_weights()
 
     def forward(self, mlvl_feats, img_metas):
+
+        # 获得初始的查询pillar
         query_bbox = self.init_query_bbox.weight.clone()  # [Q, 10]
         #query_bbox[..., :3] = query_bbox[..., :3].sigmoid()
 
+        # 构造初始的查询特征，如果是训练，则添加噪声
         # query denoising
         B = mlvl_feats[0].shape[0]
         query_bbox, query_feat, attn_mask, mask_dict = self.prepare_for_dn_input(B, query_bbox, self.label_enc, img_metas)
 
+        # 开始transformer，输出是预测的分类和回归结果
         cls_scores, bbox_preds = self.transformer(
-            query_bbox,
-            query_feat,
-            mlvl_feats,
-            attn_mask=attn_mask,
+            query_bbox,     # 查询pillar：[900, 10]
+            query_feat,     # 查询特征：[900, 256]
+            mlvl_feats,     # 特征金字塔
+            attn_mask=attn_mask, # None
             img_metas=img_metas,
         )
 
@@ -121,11 +133,13 @@ class SparseBEVHead(DETRHead):
         #  - https://github.com/IDEA-Research/DN-DETR/blob/main/models/DN_DAB_DETR/dn_components.py
         #  - https://github.com/megvii-research/PETR/blob/main/projects/mmdet3d_plugin/models/dense_heads/petrv2_dnhead.py
 
+        # 构造初始的查询特征：[900, 256]，900个查询pillar，每个pillar有256个特征
         device = init_query_bbox.device
         indicator0 = torch.zeros([self.num_query, 1], device=device)
         init_query_feat = label_enc.weight[self.num_classes].repeat(self.num_query, 1)
         init_query_feat = torch.cat([init_query_feat, indicator0], dim=1)
 
+        # 下面的代码是为了构造带有噪声的查询pillar，仅在训练时使用
         if self.training and self.dn_enabled:
             targets = [{
                 'bboxes': torch.cat([m['gt_bboxes_3d'].gravity_center,
